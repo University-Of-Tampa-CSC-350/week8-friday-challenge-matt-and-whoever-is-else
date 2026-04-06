@@ -10,8 +10,6 @@ import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
@@ -23,13 +21,11 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
-import androidx.core.app.TaskStackBuilder
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -49,16 +45,12 @@ class MainActivity : AppCompatActivity() {
     
     private val viewModel: AsteroidViewModel by viewModels()
     private var wasLoading = false
-    private val notifiedHazardIds = mutableSetOf<String>()
-    private val handler = Handler(Looper.getMainLooper())
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            Toast.makeText(this, "Mission Control link established. Alerts enabled.", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Alerts disabled. Manual monitoring required.", Toast.LENGTH_LONG).show()
+            // Permission granted - System notifications active
         }
     }
 
@@ -126,10 +118,12 @@ class MainActivity : AppCompatActivity() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val name = "Mission Control Alerts"
-            val descriptionText = "High-priority notifications for orbital monitoring"
+            val descriptionText = "High-priority orbital monitoring and tactical alerts"
             val importance = NotificationManager.IMPORTANCE_HIGH
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = descriptionText
+                enableVibration(true)
+                setShowBadge(true)
             }
             val notificationManager: NotificationManager =
                 getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -149,63 +143,41 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendNotification(id: Int, title: String, message: String, icon: Int, targetIntent: Intent? = null) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                return // Respect user's choice, do not crash
-            }
-        }
-
-        val intent = targetIntent ?: Intent(this, MainActivity::class.java).apply {
+    private fun sendNotification(id: Int, title: String, message: String, icon: Int, category: String = NotificationCompat.CATEGORY_EVENT) {
+        val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
-        
-        val pendingIntent: PendingIntent = if (targetIntent != null) {
-            TaskStackBuilder.create(this).run {
-                addNextIntentWithParentStack(intent)
-                getPendingIntent(id, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            }!!
-        } else {
-            PendingIntent.getActivity(this, id, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        }
+        val pendingIntent: PendingIntent = PendingIntent.getActivity(this, id, intent, PendingIntent.FLAG_IMMUTABLE)
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(icon)
             .setContentTitle(title)
             .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setCategory(category)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        try {
-            notificationManager.notify(id, builder.build())
-        } catch (e: Exception) {
-            // Log or handle unexpected notification failures
-        }
+        notificationManager.notify(id, builder.build())
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 100 && resultCode == RESULT_OK) {
-            viewModel.markCurrentAsDestroyed()
             val state = viewModel.uiState.value
             if (state is AsteroidUiState.Success) {
-                val names = ArrayList(viewModel.destroyedAsteroids.map { it.name })
-                val logIntent = Intent(this, DestroyedLogsActivity::class.java).apply {
-                    putStringArrayListExtra("EXTRA_NAMES", names)
-                }
-                // Condition-triggered notification
                 sendNotification(
                     NEUTRALIZED_NOTIFICATION_ID,
-                    "TARGET NEUTRALIZED",
-                    "Asteroid ${state.asteroid.name} has been successfully intercepted and destroyed.",
+                    "TACTICAL REPORT: TARGET NEUTRALIZED",
+                    "Asteroid ${state.asteroid.name} has been successfully intercepted. Orbital safety restored.",
                     R.drawable.ic_laser_beam,
-                    logIntent
+                    NotificationCompat.CATEGORY_STATUS
                 )
             }
+            viewModel.markCurrentAsDestroyed()
         }
     }
 
@@ -238,32 +210,35 @@ class MainActivity : AppCompatActivity() {
                     displaySingleAsteroid(state.asteroid, state.currentIndex, state.totalCount, state.isDestroyed)
 
                     if (wasLoading) {
-                        // Intentional delay: 3 seconds after scan finishes to simulate data processing
-                        handler.postDelayed({
-                            sendNotification(
-                                SCAN_NOTIFICATION_ID, 
-                                "MISSION CONTROL: SCAN COMPLETE", 
-                                "Deep space telemetry processed. ${state.totalCount} objects identified in sector.",
-                                R.drawable.ic_meteor
-                            )
-                        }, 3000)
+                        sendNotification(
+                            SCAN_NOTIFICATION_ID, 
+                            "TELEMETRY: SCAN COMPLETE", 
+                            "Sector scan finished. ${state.totalCount} objects identified in range.",
+                            R.drawable.ic_meteor,
+                            NotificationCompat.CATEGORY_EVENT
+                        )
                         wasLoading = false
                     }
 
-                    // Hazard notification logic: Delayed and intentional
-                    if (state.asteroid.isPotentiallyHazardous && !state.isDestroyed && !notifiedHazardIds.contains(state.asteroid.id)) {
-                        notifiedHazardIds.add(state.asteroid.id)
-                        
-                        // Delayed notification: 7 seconds to "calculate impact probability"
-                        handler.postDelayed({
-                            val diameter = (state.asteroid.estimatedDiameter.kilometers.min + state.asteroid.estimatedDiameter.kilometers.max) / 2.0
-                            sendNotification(
-                                HAZARD_NOTIFICATION_ID, 
-                                "🚨 RED ALERT: HAZARD DETECTED", 
-                                "Object ${state.asteroid.name} (~${String.format("%.2f", diameter)} km) on terminal trajectory. Action required!",
-                                R.drawable.ic_explosion
-                            )
-                        }, 7000)
+                    if (state.asteroid.isPotentiallyHazardous && !state.isDestroyed) {
+                        val diameter = (state.asteroid.estimatedDiameter.kilometers.min + state.asteroid.estimatedDiameter.kilometers.max) / 2.0
+                        sendNotification(
+                            HAZARD_NOTIFICATION_ID, 
+                            "🚨 RED ALERT: COLLISION IMMINENT", 
+                            "Object ${state.asteroid.name} (~${String.format("%.2f", diameter)} km) is on a terminal trajectory. Immediate interception required!",
+                            R.drawable.ic_explosion,
+                            NotificationCompat.CATEGORY_ALARM
+                        )
+                    }
+
+                    if (state.hasCat) {
+                        sendNotification(
+                            ANOMALY_NOTIFICATION_ID,
+                            "✨ ANOMALY: BIOLOGICAL SIGNATURE",
+                            "Sensors have detected a feline biological signature on asteroid ${state.asteroid.name}. Use caution during approach.",
+                            R.drawable.ic_meteor_fragment,
+                            NotificationCompat.CATEGORY_STATUS
+                        )
                     }
                 }
                 is AsteroidUiState.Error -> {
@@ -354,15 +329,11 @@ class MainActivity : AppCompatActivity() {
         return this
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        handler.removeCallbacksAndMessages(null) // Prevent memory leaks and orphaned notifications
-    }
-
     companion object {
         const val CHANNEL_ID = "asteroid_alerts"
         const val SCAN_NOTIFICATION_ID = 1
         const val HAZARD_NOTIFICATION_ID = 2
         const val NEUTRALIZED_NOTIFICATION_ID = 3
+        const val ANOMALY_NOTIFICATION_ID = 4
     }
 }
