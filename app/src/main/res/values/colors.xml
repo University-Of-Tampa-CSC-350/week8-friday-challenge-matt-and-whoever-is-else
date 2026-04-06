@@ -2,4 +2,10 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="space_black">#0B0D17</color>
+    <color name="nebula_purple">#4B2194</color>
+    <color name="star_gold">#FFD700</color>
+    <color name="hazard_red">#FF4B2B</color>
+    <color name="safe_green">#00E676</color>
+    <color name="text_secondary">#B0B0B0</color>
 </resources>
