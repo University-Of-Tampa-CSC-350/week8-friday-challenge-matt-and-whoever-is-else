@@ -1,11 +1,15 @@
 package com.example.fc_006
 
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fc_006.data.Asteroid
 import com.example.fc_006.data.RetrofitInstance
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
@@ -22,7 +26,10 @@ sealed class AsteroidUiState {
     data class Error(val message: String) : AsteroidUiState()
 }
 
-class AsteroidViewModel : ViewModel() {
+class AsteroidViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val prefs = application.getSharedPreferences("asteroid_prefs", Context.MODE_PRIVATE)
+    private val gson = Gson()
 
     private val _uiState = MutableLiveData<AsteroidUiState>(AsteroidUiState.Idle)
     val uiState: LiveData<AsteroidUiState> = _uiState
@@ -46,6 +53,7 @@ class AsteroidViewModel : ViewModel() {
                 if (asteroidList.isNotEmpty()) {
                     catAsteroidId = asteroidList[Random.nextInt(asteroidList.size)].id
                 }
+                saveScanData()
                 updateState()
             } catch (e: Exception) {
                 _uiState.value = AsteroidUiState.Error("Mission Control lost asteroid tracking data.")
@@ -53,9 +61,38 @@ class AsteroidViewModel : ViewModel() {
         }
     }
 
+    fun restoreLastScan() {
+        val json = prefs.getString("last_scan", null)
+        if (json != null) {
+            val type = object : TypeToken<List<Asteroid>>() {}.type
+            asteroidList = gson.fromJson(json, type)
+            currentIndex = prefs.getInt("current_index", 0)
+            catAsteroidId = prefs.getString("cat_id", null)
+            val destroyedJson = prefs.getString("destroyed_ids", "[]")
+            val destroyedType = object : TypeToken<Set<String>>() {}.type
+            destroyedAsteroidIds.clear()
+            destroyedAsteroidIds.addAll(gson.fromJson(destroyedJson, destroyedType))
+
+            if (asteroidList.isNotEmpty()) {
+                updateState()
+            }
+        }
+    }
+
+    private fun saveScanData() {
+        prefs.edit().apply {
+            putString("last_scan", gson.toJson(asteroidList))
+            putInt("current_index", currentIndex)
+            putString("cat_id", catAsteroidId)
+            putString("destroyed_ids", gson.toJson(destroyedAsteroidIds))
+            apply()
+        }
+    }
+
     fun nextAsteroid() {
         if (currentIndex < asteroidList.size - 1) {
             currentIndex++
+            saveScanData()
             updateState()
         }
     }
@@ -63,6 +100,7 @@ class AsteroidViewModel : ViewModel() {
     fun previousAsteroid() {
         if (currentIndex > 0) {
             currentIndex--
+            saveScanData()
             updateState()
         }
     }
@@ -70,6 +108,7 @@ class AsteroidViewModel : ViewModel() {
     fun markCurrentAsDestroyed() {
         if (asteroidList.isNotEmpty()) {
             destroyedAsteroidIds.add(asteroidList[currentIndex].id)
+            saveScanData()
             updateState()
         }
     }

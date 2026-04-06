@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -29,7 +31,11 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.example.fc_006.data.Asteroid
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -50,7 +56,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            // Permission granted - System notifications active
+            scheduleScanReminder()
         }
     }
 
@@ -80,6 +86,7 @@ class MainActivity : AppCompatActivity() {
 
         scanButton.setOnClickListener {
             viewModel.scanForAsteroids()
+            scheduleScanReminder()
         }
 
         prevButton.setOnClickListener {
@@ -113,6 +120,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         observeViewModel()
+        
+        if (viewModel.uiState.value is AsteroidUiState.Idle) {
+            viewModel.restoreLastScan()
+        }
     }
 
     private fun createNotificationChannel() {
@@ -139,18 +150,51 @@ class MainActivity : AppCompatActivity() {
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
                 requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                scheduleScanReminder()
             }
+        } else {
+            scheduleScanReminder()
         }
     }
 
-    private fun sendNotification(id: Int, title: String, message: String, icon: Int, category: String = NotificationCompat.CATEGORY_EVENT) {
+    private fun scheduleScanReminder() {
+        // Changed to OneTimeWorkRequest with 10 seconds delay for testing purposes
+        val reminderRequest = OneTimeWorkRequestBuilder<ScanReminderWorker>()
+            .setInitialDelay(10, TimeUnit.SECONDS)
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            "scan_reminder",
+            ExistingWorkPolicy.REPLACE, // REPLACE ensures the 10-second timer resets on every scan
+            reminderRequest
+        )
+    }
+
+    private fun getBitmapFromVectorDrawable(context: Context, drawableId: Int): Bitmap? {
+        val drawable = ContextCompat.getDrawable(context, drawableId) ?: return null
+        val bitmap = Bitmap.createBitmap(
+            drawable.intrinsicWidth,
+            drawable.intrinsicHeight,
+            Bitmap.Config.ARGB_8888
+        )
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
+    private fun sendNotification(id: Int, title: String, message: String, icon: Int, colorRes: Int, category: String = NotificationCompat.CATEGORY_EVENT) {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         val pendingIntent: PendingIntent = PendingIntent.getActivity(this, id, intent, PendingIntent.FLAG_IMMUTABLE)
+        
+        val largeIconBitmap = getBitmapFromVectorDrawable(this, icon)
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(icon)
+            .setLargeIcon(largeIconBitmap)
             .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
@@ -158,6 +202,7 @@ class MainActivity : AppCompatActivity() {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setCategory(category)
+            .setColor(ContextCompat.getColor(this, colorRes))
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -174,6 +219,7 @@ class MainActivity : AppCompatActivity() {
                     "TACTICAL REPORT: TARGET NEUTRALIZED",
                     "Asteroid ${state.asteroid.name} has been successfully intercepted. Orbital safety restored.",
                     R.drawable.ic_notification_neutralized,
+                    R.color.safe_green,
                     NotificationCompat.CATEGORY_STATUS
                 )
             }
@@ -215,6 +261,7 @@ class MainActivity : AppCompatActivity() {
                             "TELEMETRY: SCAN COMPLETE", 
                             "Sector scan finished. ${state.totalCount} objects identified in range.",
                             R.drawable.ic_notification_scan,
+                            R.color.star_gold,
                             NotificationCompat.CATEGORY_EVENT
                         )
                         wasLoading = false
@@ -227,6 +274,7 @@ class MainActivity : AppCompatActivity() {
                             "🚨 RED ALERT: COLLISION IMMINENT", 
                             "Object ${state.asteroid.name} (~${String.format("%.2f", diameter)} km) is on a terminal trajectory. Immediate interception required!",
                             R.drawable.ic_notification_hazard,
+                            R.color.hazard_red,
                             NotificationCompat.CATEGORY_ALARM
                         )
                     }
@@ -237,6 +285,7 @@ class MainActivity : AppCompatActivity() {
                             "✨ ANOMALY: BIOLOGICAL SIGNATURE",
                             "Sensors have detected a feline biological signature on asteroid ${state.asteroid.name}. Use caution during approach.",
                             R.drawable.ic_notification_anomaly,
+                            R.color.star_gold,
                             NotificationCompat.CATEGORY_STATUS
                         )
                     }
