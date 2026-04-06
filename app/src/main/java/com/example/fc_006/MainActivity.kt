@@ -173,7 +173,7 @@ class MainActivity : AppCompatActivity() {
                     NEUTRALIZED_NOTIFICATION_ID,
                     "TACTICAL REPORT: TARGET NEUTRALIZED",
                     "Asteroid ${state.asteroid.name} has been successfully intercepted. Orbital safety restored.",
-                    R.drawable.ic_laser_beam,
+                    R.drawable.ic_notification_neutralized,
                     NotificationCompat.CATEGORY_STATUS
                 )
             }
@@ -214,7 +214,7 @@ class MainActivity : AppCompatActivity() {
                             SCAN_NOTIFICATION_ID, 
                             "TELEMETRY: SCAN COMPLETE", 
                             "Sector scan finished. ${state.totalCount} objects identified in range.",
-                            R.drawable.ic_meteor,
+                            R.drawable.ic_notification_scan,
                             NotificationCompat.CATEGORY_EVENT
                         )
                         wasLoading = false
@@ -226,7 +226,7 @@ class MainActivity : AppCompatActivity() {
                             HAZARD_NOTIFICATION_ID, 
                             "🚨 RED ALERT: COLLISION IMMINENT", 
                             "Object ${state.asteroid.name} (~${String.format("%.2f", diameter)} km) is on a terminal trajectory. Immediate interception required!",
-                            R.drawable.ic_explosion,
+                            R.drawable.ic_notification_hazard,
                             NotificationCompat.CATEGORY_ALARM
                         )
                     }
@@ -236,7 +236,7 @@ class MainActivity : AppCompatActivity() {
                             ANOMALY_NOTIFICATION_ID,
                             "✨ ANOMALY: BIOLOGICAL SIGNATURE",
                             "Sensors have detected a feline biological signature on asteroid ${state.asteroid.name}. Use caution during approach.",
-                            R.drawable.ic_meteor_fragment,
+                            R.drawable.ic_notification_anomaly,
                             NotificationCompat.CATEGORY_STATUS
                         )
                     }
