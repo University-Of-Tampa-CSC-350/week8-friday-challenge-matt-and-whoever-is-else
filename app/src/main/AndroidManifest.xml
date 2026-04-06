@@ -26,10 +26,12 @@
         <activity
             android:name=".MeteorDetailActivity"
             android:exported="false"
+            android:parentActivityName=".MainActivity"
             android:theme="@style/Theme.FC_006" />
         <activity
             android:name=".DestroyedLogsActivity"
             android:exported="false"
+            android:parentActivityName=".MainActivity"
             android:theme="@style/Theme.FC_006" />
         <activity
             android:name=".ScatteredViewActivity"

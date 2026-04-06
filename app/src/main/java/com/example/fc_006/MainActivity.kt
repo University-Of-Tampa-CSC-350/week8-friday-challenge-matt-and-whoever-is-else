@@ -10,6 +10,8 @@ import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
@@ -21,11 +23,13 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
+import androidx.core.app.TaskStackBuilder
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -45,14 +49,16 @@ class MainActivity : AppCompatActivity() {
     
     private val viewModel: AsteroidViewModel by viewModels()
     private var wasLoading = false
+    private val notifiedHazardIds = mutableSetOf<String>()
+    private val handler = Handler(Looper.getMainLooper())
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            // Permission granted
+            Toast.makeText(this, "Mission Control link established. Alerts enabled.", Toast.LENGTH_SHORT).show()
         } else {
-            // Permission denied
+            Toast.makeText(this, "Alerts disabled. Manual monitoring required.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -143,11 +149,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendNotification(id: Int, title: String, message: String, icon: Int) {
-        val intent = Intent(this, MainActivity::class.java).apply {
+    private fun sendNotification(id: Int, title: String, message: String, icon: Int, targetIntent: Intent? = null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                return // Respect user's choice, do not crash
+            }
+        }
+
+        val intent = targetIntent ?: Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
-        val pendingIntent: PendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+        
+        val pendingIntent: PendingIntent = if (targetIntent != null) {
+            TaskStackBuilder.create(this).run {
+                addNextIntentWithParentStack(intent)
+                getPendingIntent(id, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            }!!
+        } else {
+            PendingIntent.getActivity(this, id, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(icon)
@@ -160,22 +180,32 @@ class MainActivity : AppCompatActivity() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(id, builder.build())
+        try {
+            notificationManager.notify(id, builder.build())
+        } catch (e: Exception) {
+            // Log or handle unexpected notification failures
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 100 && resultCode == RESULT_OK) {
+            viewModel.markCurrentAsDestroyed()
             val state = viewModel.uiState.value
             if (state is AsteroidUiState.Success) {
+                val names = ArrayList(viewModel.destroyedAsteroids.map { it.name })
+                val logIntent = Intent(this, DestroyedLogsActivity::class.java).apply {
+                    putStringArrayListExtra("EXTRA_NAMES", names)
+                }
+                // Condition-triggered notification
                 sendNotification(
                     NEUTRALIZED_NOTIFICATION_ID,
                     "TARGET NEUTRALIZED",
                     "Asteroid ${state.asteroid.name} has been successfully intercepted and destroyed.",
-                    R.drawable.ic_laser_beam
+                    R.drawable.ic_laser_beam,
+                    logIntent
                 )
             }
-            viewModel.markCurrentAsDestroyed()
         }
     }
 
@@ -208,23 +238,32 @@ class MainActivity : AppCompatActivity() {
                     displaySingleAsteroid(state.asteroid, state.currentIndex, state.totalCount, state.isDestroyed)
 
                     if (wasLoading) {
-                        sendNotification(
-                            SCAN_NOTIFICATION_ID, 
-                            "MISSION CONTROL: SCAN COMPLETE", 
-                            "Deep space telemetry processed. ${state.totalCount} objects identified in sector.",
-                            R.drawable.ic_meteor
-                        )
+                        // Intentional delay: 3 seconds after scan finishes to simulate data processing
+                        handler.postDelayed({
+                            sendNotification(
+                                SCAN_NOTIFICATION_ID, 
+                                "MISSION CONTROL: SCAN COMPLETE", 
+                                "Deep space telemetry processed. ${state.totalCount} objects identified in sector.",
+                                R.drawable.ic_meteor
+                            )
+                        }, 3000)
                         wasLoading = false
                     }
 
-                    if (state.asteroid.isPotentiallyHazardous && !state.isDestroyed) {
-                        val diameter = (state.asteroid.estimatedDiameter.kilometers.min + state.asteroid.estimatedDiameter.kilometers.max) / 2.0
-                        sendNotification(
-                            HAZARD_NOTIFICATION_ID, 
-                            "🚨 RED ALERT: HAZARD DETECTED", 
-                            "Object ${state.asteroid.name} (~${String.format("%.2f", diameter)} km) on terminal trajectory. Action required!",
-                            R.drawable.ic_explosion
-                        )
+                    // Hazard notification logic: Delayed and intentional
+                    if (state.asteroid.isPotentiallyHazardous && !state.isDestroyed && !notifiedHazardIds.contains(state.asteroid.id)) {
+                        notifiedHazardIds.add(state.asteroid.id)
+                        
+                        // Delayed notification: 7 seconds to "calculate impact probability"
+                        handler.postDelayed({
+                            val diameter = (state.asteroid.estimatedDiameter.kilometers.min + state.asteroid.estimatedDiameter.kilometers.max) / 2.0
+                            sendNotification(
+                                HAZARD_NOTIFICATION_ID, 
+                                "🚨 RED ALERT: HAZARD DETECTED", 
+                                "Object ${state.asteroid.name} (~${String.format("%.2f", diameter)} km) on terminal trajectory. Action required!",
+                                R.drawable.ic_explosion
+                            )
+                        }, 7000)
                     }
                 }
                 is AsteroidUiState.Error -> {
@@ -313,6 +352,11 @@ class MainActivity : AppCompatActivity() {
         append(text)
         setSpan(span, start, length, flags)
         return this
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacksAndMessages(null) // Prevent memory leaks and orphaned notifications
     }
 
     companion object {
