@@ -1,7 +1,14 @@
 package com.example.fc_006
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.text.Spannable
 import android.text.SpannableStringBuilder
@@ -15,8 +22,10 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -35,6 +44,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var destroyedMeteorsButton: Button
     
     private val viewModel: AsteroidViewModel by viewModels()
+    private var wasLoading = false
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Permission granted
+        } else {
+            // Permission denied
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,6 +76,9 @@ class MainActivity : AppCompatActivity() {
         indexText = findViewById(R.id.indexText)
         viewMeteorButton = findViewById(R.id.viewMeteorButton)
         destroyedMeteorsButton = findViewById(R.id.destroyedMeteorsButton)
+
+        createNotificationChannel()
+        requestNotificationPermission()
 
         scanButton.setOnClickListener {
             viewModel.scanForAsteroids()
@@ -94,9 +117,64 @@ class MainActivity : AppCompatActivity() {
         observeViewModel()
     }
 
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = "Mission Control Alerts"
+            val descriptionText = "High-priority notifications for orbital monitoring"
+            val importance = NotificationManager.IMPORTANCE_HIGH
+            val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
+                description = descriptionText
+            }
+            val notificationManager: NotificationManager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    private fun sendNotification(id: Int, title: String, message: String, icon: Int) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent: PendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(icon)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(id, builder.build())
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 100 && resultCode == RESULT_OK) {
+            val state = viewModel.uiState.value
+            if (state is AsteroidUiState.Success) {
+                sendNotification(
+                    NEUTRALIZED_NOTIFICATION_ID,
+                    "TARGET NEUTRALIZED",
+                    "Asteroid ${state.asteroid.name} has been successfully intercepted and destroyed.",
+                    R.drawable.ic_laser_beam
+                )
+            }
             viewModel.markCurrentAsDestroyed()
         }
     }
@@ -117,6 +195,7 @@ class MainActivity : AppCompatActivity() {
                     viewMeteorButton.visibility = View.GONE
                     destroyedMeteorsButton.visibility = View.GONE
                     scanButton.isEnabled = false
+                    wasLoading = true
                 }
                 is AsteroidUiState.Success -> {
                     loadingOverlay.visibility = View.GONE
@@ -127,6 +206,26 @@ class MainActivity : AppCompatActivity() {
                     
                     scanButton.isEnabled = true
                     displaySingleAsteroid(state.asteroid, state.currentIndex, state.totalCount, state.isDestroyed)
+
+                    if (wasLoading) {
+                        sendNotification(
+                            SCAN_NOTIFICATION_ID, 
+                            "MISSION CONTROL: SCAN COMPLETE", 
+                            "Deep space telemetry processed. ${state.totalCount} objects identified in sector.",
+                            R.drawable.ic_meteor
+                        )
+                        wasLoading = false
+                    }
+
+                    if (state.asteroid.isPotentiallyHazardous && !state.isDestroyed) {
+                        val diameter = (state.asteroid.estimatedDiameter.kilometers.min + state.asteroid.estimatedDiameter.kilometers.max) / 2.0
+                        sendNotification(
+                            HAZARD_NOTIFICATION_ID, 
+                            "🚨 RED ALERT: HAZARD DETECTED", 
+                            "Object ${state.asteroid.name} (~${String.format("%.2f", diameter)} km) on terminal trajectory. Action required!",
+                            R.drawable.ic_explosion
+                        )
+                    }
                 }
                 is AsteroidUiState.Error -> {
                     loadingOverlay.visibility = View.GONE
@@ -135,6 +234,7 @@ class MainActivity : AppCompatActivity() {
                     destroyedMeteorsButton.visibility = View.GONE
                     scanButton.isEnabled = true
                     showErrorMessage(state.message)
+                    wasLoading = false
                 }
             }
         }
@@ -213,5 +313,12 @@ class MainActivity : AppCompatActivity() {
         append(text)
         setSpan(span, start, length, flags)
         return this
+    }
+
+    companion object {
+        const val CHANNEL_ID = "asteroid_alerts"
+        const val SCAN_NOTIFICATION_ID = 1
+        const val HAZARD_NOTIFICATION_ID = 2
+        const val NEUTRALIZED_NOTIFICATION_ID = 3
     }
 }
